@@ -1,0 +1,114 @@
+// Target Postgres schema (Phase 1). Not yet wired: the API runs on InMemoryVoteStore.
+// Implement `VoteStore` with Prisma/pg against this schema. Hard rules:
+//   1. Ballot has NO relation to Voter and NO timestamp column.
+//   2. Participation has NO relation to Ballot.
+//   3. commitVote = one SERIALIZABLE transaction (participation insert + ballot insert).
+//   4. AuditLog is append-only: revoke UPDATE/DELETE from the app role.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IntegrityMode { ANONYMOUS_AUDIT E2E_VERIFIABLE }
+enum ElectionState { DRAFT OPEN CLOSED SEALED }
+enum BallotType    { SINGLE MULTI APPROVAL RANKED REFERENDUM }
+
+model Tenant {
+  id        String     @id @default(uuid())
+  parentId  String?
+  parent    Tenant?    @relation("TenantTree", fields: [parentId], references: [id])
+  children  Tenant[]   @relation("TenantTree")
+  type      String     // INSTITUTION | FACULTY | DEPARTMENT
+  name      String
+  config    Json       @default("{}")
+  elections Election[]
+  voters    Voter[]
+}
+
+model Voter {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  idHash    String   // salted hash of matric / national ID, never the raw value
+  status    String   @default("ACTIVE")
+  eligible  EligibleVoter[]
+  @@unique([tenantId, idHash])
+}
+
+model Election {
+  id          String        @id @default(uuid())
+  tenantId    String
+  tenant      Tenant        @relation(fields: [tenantId], references: [id])
+  title       String
+  mode        IntegrityMode
+  state       ElectionState @default(DRAFT)
+  opensAt     DateTime?
+  closesAt    DateTime?
+  positions   Position[]
+  eligible    EligibleVoter[]
+  sealed      Json?
+  @@index([tenantId, state])
+}
+
+model Position {
+  id            String   @id @default(uuid())
+  electionId    String
+  election      Election @relation(fields: [electionId], references: [id])
+  type          BallotType
+  seats         Int      @default(1)
+  allowAbstain  Boolean  @default(false)
+  candidates    Candidate[]
+}
+
+model Candidate {
+  id          String   @id @default(uuid())
+  positionId  String
+  position    Position @relation(fields: [positionId], references: [id])
+  name        String
+  status      String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  profile     Json     @default("{}")
+}
+
+model EligibleVoter {
+  electionId String
+  voterId    String
+  election   Election @relation(fields: [electionId], references: [id])
+  voter      Voter    @relation(fields: [voterId], references: [id])
+  @@id([electionId, voterId])
+}
+
+// Who voted on what position. Says nothing about the choice.
+model Participation {
+  electionId String
+  voterId    String
+  positionId String
+  @@id([electionId, voterId, positionId])
+}
+
+// The anonymous ballot box. Partition by electionId in production.
+model Ballot {
+  id          String @id @default(uuid())
+  electionId  String
+  positionId  String
+  payload     Json   // plain selection (Mode A) or ciphertext (Mode B)
+  ballotHash  String @unique
+  receiptHash String @unique
+  @@index([electionId, positionId])
+}
+
+model AuditLog {
+  electionId String
+  seq        Int
+  prevHash   String
+  hash       String
+  event      String
+  actor      String
+  payload    Json
+  at         DateTime
+  @@id([electionId, seq])
+}
