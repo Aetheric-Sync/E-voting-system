@@ -6,7 +6,8 @@ import { configureApp } from './configure';
 import { ElectionsService } from './elections/elections.service';
 import { validateEnvironment } from './validateEnv';
 
-export { validateEnvironment };
+// Keep this file free of exports: Vercel treats an entrypoint with exports as a handler module
+// and then requires a default-exported function, instead of using the app.listen() server below.
 
 async function bootstrap() {
   validateEnvironment();
