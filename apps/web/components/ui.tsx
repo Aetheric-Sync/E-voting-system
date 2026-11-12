@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { STATE_LABEL } from '@/lib/format';
 import type { ElectionState } from '@/lib/types';
 
@@ -43,50 +43,126 @@ export function Meter({ value, max, label }: { value: number; max: number; label
   );
 }
 
-/** Two-step button: first click asks, second click does it. Avoids blocking browser dialogs. */
+/** Accessible modal confirmation dialog: backdrop, focus trap, Escape to dismiss, focus returns to trigger, ARIA labelled. */
 export function ConfirmButton({
   children,
   confirmText,
+  description,
   onConfirm,
   className = 'btn',
   disabled,
 }: {
   children: ReactNode;
   confirmText: string;
+  description?: string;
   onConfirm: () => void | Promise<void>;
   className?: string;
   disabled?: boolean;
 }) {
-  const [asking, setAsking] = useState(false);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  if (!asking)
-    return (
-      <button type="button" className={className} disabled={disabled} onClick={() => setAsking(true)}>
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const confirmBtnRef = useRef<HTMLButtonElement>(null);
+
+  function close() {
+    if (busy) return;
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+        return;
+      }
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown);
+    const timer = setTimeout(() => confirmBtnRef.current?.focus(), 50);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      clearTimeout(timer);
+    };
+  }, [open, busy]);
+
+  async function handleConfirm() {
+    setBusy(true);
+    try {
+      await onConfirm();
+      setOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={className}
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
         {children}
       </button>
-    );
-  return (
-    <span className="alert warn row" style={{ margin: 0, padding: '.5rem .75rem' }}>
-      <span>{confirmText}</span>
-      <button
-        type="button"
-        className="btn sm primary"
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            await onConfirm();
-          } finally {
-            setBusy(false);
-            setAsking(false);
-          }
-        }}
-      >
-        {busy ? 'Working…' : 'Yes, continue'}
-      </button>
-      <button type="button" className="btn sm" disabled={busy} onClick={() => setAsking(false)}>
-        Cancel
-      </button>
-    </span>
+
+      {open && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) close();
+          }}
+        >
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-dialog-title"
+            className="modal-dialog stack"
+          >
+            <h2 id="confirm-dialog-title" style={{ margin: 0 }}>
+              {confirmText}
+            </h2>
+            {description && <p className="muted small">{description}</p>}
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: '1rem', gap: '.5rem' }}>
+              <button type="button" className="btn" disabled={busy} onClick={close}>
+                Cancel
+              </button>
+              <button
+                ref={confirmBtnRef}
+                type="button"
+                className={className.includes('danger') ? 'btn danger' : 'btn primary'}
+                disabled={busy}
+                onClick={handleConfirm}
+              >
+                {busy ? 'Working…' : 'Yes, continue'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

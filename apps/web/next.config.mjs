@@ -4,6 +4,8 @@ const API_URL = process.env.API_URL ?? 'http://localhost:3000';
 const nextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  // Enable standalone output for Docker deployment (see apps/web/Dockerfile)
+  output: process.env.NEXT_STANDALONE === '1' ? 'standalone' : undefined,
   // The browser only ever talks to this origin. /api/* is forwarded to the API, so the session
   // cookie stays first-party (HttpOnly, SameSite=Lax) and no CORS is needed.
   async rewrites() {

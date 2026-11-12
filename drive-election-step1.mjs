@@ -47,25 +47,22 @@ async function run() {
     await adminPage.fill('input[aria-label="Name 2"]', 'Bob Smith');
 
     await adminPage.click('button:has-text("Create draft election")');
-    await adminPage.waitForURL((url) => url.pathname.startsWith('/admin/elections/') && url.pathname !== '/admin/elections/new');
+    await adminPage.waitForURL(/\/admin\/elections\/[a-zA-Z0-9_-]+/);
     const url = adminPage.url();
-    electionId = url.split('/admin/elections/')[1].split('?')[0].replace(/\/$/, '');
+    electionId = url.split('/admin/elections/')[1];
     console.log(`✓ Election created with ID: ${electionId}`);
     results.electionCreated = true;
 
     console.log('--- Step 3: Create Observer Account in /admin/users ---');
     await adminPage.goto('http://localhost:3001/admin/users');
-    const observerEmail = `observer_${Date.now()}@uni.test`;
-    
-    // Check fields on page
     await adminPage.fill('label:has-text("Full name") input', 'Jane Observer');
-    await adminPage.fill('label:has-text("Email") input', observerEmail);
+    await adminPage.fill('label:has-text("Email") input', 'observer@uni.test');
     await adminPage.fill('label:has-text("Temporary password") input', 'observerpass123');
-    await adminPage.selectOption('label:has-text("Role") select', 'OBSERVER');
+    await adminPage.selectOption('select', 'OBSERVER');
     await adminPage.click('button:has-text("Create account")');
-    await adminPage.waitForSelector(`text=Created ${observerEmail}`);
+    await adminPage.waitForSelector('text=Created observer@uni.test');
     results.observerUserCreated = true;
-    console.log(`✓ Observer account created: ${observerEmail}`);
+    console.log('✓ Observer account created');
 
     console.log('--- Step 4: Import Voters and Open Election ---');
     await adminPage.goto(`http://localhost:3001/admin/elections/${electionId}`);
@@ -80,9 +77,9 @@ async function run() {
 
     // Switch to Overview tab and open
     await adminPage.click('button[role="tab"]:has-text("Overview")');
-    // First click on "Open voting" triggers confirm prompt, then click "Yes, continue"
+    // First click on "Open voting" triggers confirm prompt
     await adminPage.click('button:has-text("Open voting")');
-    await adminPage.click('button:has-text("Yes, continue")');
+    await adminPage.click('button:has-text("Open voting now?")');
     // Wait for state chip or state change
     await adminPage.waitForSelector('.chip.OPEN');
     results.electionOpened = true;
@@ -190,14 +187,14 @@ async function run() {
     await adminPage.goto(`http://localhost:3001/admin/elections/${electionId}`);
     // Close voting
     await adminPage.click('button:has-text("Close voting")');
-    await adminPage.click('button:has-text("Yes, continue")');
+    await adminPage.click('button:has-text("Stop accepting votes now?")');
     await adminPage.waitForSelector('.chip.CLOSED');
     results.electionClosed = true;
     console.log('✓ Election closed');
 
     // Seal and publish
     await adminPage.click('button:has-text("Seal and publish results")');
-    await adminPage.click('button:has-text("Yes, continue")');
+    await adminPage.click('button:has-text("Count and publish the results?")');
     await adminPage.waitForSelector('.chip.SEALED');
     results.electionSealed = true;
     console.log('✓ Election sealed');
@@ -225,7 +222,7 @@ async function run() {
     const observerContext = await browser.newContext();
     const observerPage = await observerContext.newPage();
     await observerPage.goto('http://localhost:3001/staff');
-    await observerPage.fill('input[type="email"]', observerEmail);
+    await observerPage.fill('input[type="email"]', 'observer@uni.test');
     await observerPage.fill('input[type="password"]', 'observerpass123');
     await observerPage.click('button:has-text("Sign in")');
     await observerPage.waitForURL('**/observer');

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ChangeEvent, useMemo, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { api, errorText } from '@/lib/api';
 import { download, fmtDate, pct } from '@/lib/format';
 import { useLoad } from '@/lib/hooks';
@@ -14,6 +14,7 @@ type Tab = 'overview' | 'voters' | 'ballot' | 'results' | 'audit';
 
 const EVENT_LABEL: Record<string, string> = {
   ELECTION_CREATED: 'Election created',
+  ELECTION_UPDATED: 'Election edited',
   REGISTER_UPDATED: 'Voter register updated',
   ELECTION_OPENED: 'Voting opened',
   BALLOT_ACCEPTED: 'Ballot accepted',
@@ -27,6 +28,7 @@ export function ElectionDetail({ id, readOnly, backHref }: { id: string; readOnl
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('overview');
   const [actionError, setActionError] = useState('');
+  const [duplicateBusy, setDuplicateBusy] = useState(false);
   const election = useLoad(() => api<Election>(`/elections/${id}`), [id], 15000);
   const e = election.data;
   const turnout = useLoad(() => api<Turnout>(`/elections/${id}/turnout`), [id, e?.state], e?.state === 'OPEN' ? 8000 : undefined);
@@ -40,6 +42,19 @@ export function ElectionDetail({ id, readOnly, backHref }: { id: string; readOnl
       setActionError(errorText(err));
     }
   }
+
+  async function duplicate() {
+    setActionError('');
+    setDuplicateBusy(true);
+    try {
+      const copy = await api<Election>(`/elections/${id}/duplicate`, { method: 'POST' });
+      router.push(`/admin/elections/${copy.id}`);
+    } catch (err) {
+      setActionError(errorText(err));
+      setDuplicateBusy(false);
+    }
+  }
+
   async function remove() {
     try {
       await api(`/elections/${id}`, { method: 'DELETE' });
@@ -82,7 +97,15 @@ export function ElectionDetail({ id, readOnly, backHref }: { id: string; readOnl
       </div>
 
       {tab === 'overview' && (
-        <Overview e={e} turnout={turnout.data} readOnly={readOnly} act={act} remove={remove} />
+        <Overview
+          e={e}
+          turnout={turnout.data}
+          readOnly={readOnly}
+          act={act}
+          remove={remove}
+          duplicate={duplicate}
+          duplicateBusy={duplicateBusy}
+        />
       )}
       {tab === 'voters' && !readOnly && <Voters id={id} state={e.state} onChanged={() => { void turnout.reload(true); }} />}
       {tab === 'ballot' && <BallotPreview e={e} />}
@@ -97,7 +120,23 @@ export function ElectionDetail({ id, readOnly, backHref }: { id: string; readOnl
   );
 }
 
-function Overview({ e, turnout, readOnly, act, remove }: { e: Election; turnout: Turnout | null; readOnly: boolean; act: (p: string) => Promise<void>; remove: () => Promise<void> }) {
+function Overview({
+  e,
+  turnout,
+  readOnly,
+  act,
+  remove,
+  duplicate,
+  duplicateBusy,
+}: {
+  e: Election;
+  turnout: Turnout | null;
+  readOnly: boolean;
+  act: (p: string) => Promise<void>;
+  remove: () => Promise<void>;
+  duplicate: () => Promise<void>;
+  duplicateBusy: boolean;
+}) {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   return (
     <div className="stack">
@@ -165,6 +204,12 @@ function Overview({ e, turnout, readOnly, act, remove }: { e: Election; turnout:
                 <ConfirmButton className="btn primary" confirmText="Open voting now?" disabled={!turnout?.eligible} onConfirm={() => act('open')}>
                   Open voting
                 </ConfirmButton>
+                <Link className="btn" href={`/admin/elections/${e.id}/edit`}>
+                  Edit draft
+                </Link>
+                <button type="button" className="btn" disabled={duplicateBusy} onClick={duplicate}>
+                  {duplicateBusy ? 'Duplicating…' : 'Duplicate election'}
+                </button>
                 <ConfirmButton className="btn danger" confirmText="Delete this draft for good?" onConfirm={remove}>
                   Delete draft
                 </ConfirmButton>
@@ -172,22 +217,39 @@ function Overview({ e, turnout, readOnly, act, remove }: { e: Election; turnout:
             </>
           )}
           {e.state === 'OPEN' && (
-            <ConfirmButton className="btn primary" confirmText="Stop accepting votes now?" onConfirm={() => act('close')}>
-              Close voting
-            </ConfirmButton>
+            <div className="row">
+              <ConfirmButton className="btn primary" confirmText="Stop accepting votes now?" onConfirm={() => act('close')}>
+                Close voting
+              </ConfirmButton>
+              <button type="button" className="btn" disabled={duplicateBusy} onClick={duplicate}>
+                {duplicateBusy ? 'Duplicating…' : 'Duplicate election'}
+              </button>
+            </div>
           )}
           {e.state === 'CLOSED' && (
             <>
               <p className="muted small">Sealing counts every ballot, publishes the result, and records its fingerprint in the audit log. It cannot be undone.</p>
-              <ConfirmButton className="btn primary" confirmText="Count and publish the results?" onConfirm={() => act('seal')}>
-                Seal and publish results
-              </ConfirmButton>
+              <div className="row">
+                <ConfirmButton className="btn primary" confirmText="Count and publish the results?" onConfirm={() => act('seal')}>
+                  Seal and publish results
+                </ConfirmButton>
+                <button type="button" className="btn" disabled={duplicateBusy} onClick={duplicate}>
+                  {duplicateBusy ? 'Duplicating…' : 'Duplicate election'}
+                </button>
+              </div>
             </>
           )}
           {e.state === 'SEALED' && (
-            <p>
-              Results are public at <Link href={`/results/${e.id}`}>/results/{e.id}</Link>.
-            </p>
+            <div className="stack">
+              <p>
+                Results are public at <Link href={`/results/${e.id}`}>/results/{e.id}</Link>.
+              </p>
+              <div className="row">
+                <button type="button" className="btn" disabled={duplicateBusy} onClick={duplicate}>
+                  {duplicateBusy ? 'Duplicating…' : 'Duplicate as new draft'}
+                </button>
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -202,7 +264,13 @@ function Voters({ id, state, onChanged }: { id: string; state: Election['state']
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const locked = state !== 'DRAFT';
+
+  useEffect(() => {
+    setPage(1);
+  }, [q]);
 
   function onFile(ev: ChangeEvent<HTMLInputElement>) {
     const f = ev.target.files?.[0];
@@ -229,7 +297,15 @@ function Voters({ id, state, onChanged }: { id: string; state: Election['state']
     }
   }
 
-  const rows = useMemo(() => (register.data ?? []).filter((r) => !q || `${r.id} ${r.name}`.toLowerCase().includes(q.toLowerCase())), [register.data, q]);
+  const rows = useMemo(
+    () => (register.data ?? []).filter((r) => !q || `${r.id} ${r.name}`.toLowerCase().includes(q.toLowerCase())),
+    [register.data, q],
+  );
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentSafePage = Math.min(page, totalPages);
+  const startIdx = (currentSafePage - 1) * pageSize;
+  const pageRows = rows.slice(startIdx, startIdx + pageSize);
 
   return (
     <div className="stack">
@@ -277,7 +353,14 @@ function Voters({ id, state, onChanged }: { id: string; state: Election['state']
       <div className="card">
         <div className="row between">
           <h2>Register ({register.data?.length ?? 0})</h2>
-          <input type="text" placeholder="Search by name or ID" value={q} onChange={(ev) => setQ(ev.target.value)} style={{ maxWidth: 240, margin: 0 }} aria-label="Search the register" />
+          <input
+            type="text"
+            placeholder="Search by name or ID"
+            value={q}
+            onChange={(ev) => setQ(ev.target.value)}
+            style={{ maxWidth: 240, margin: 0 }}
+            aria-label="Search the register"
+          />
         </div>
         {register.loading && !register.data && <Loading />}
         <div className="table-wrap">
@@ -291,7 +374,7 @@ function Voters({ id, state, onChanged }: { id: string; state: Election['state']
               </tr>
             </thead>
             <tbody>
-              {rows.slice(0, 200).map((r) => (
+              {pageRows.map((r) => (
                 <tr key={r.id}>
                   <td className="mono">{r.id}</td>
                   <td>{r.name}</td>
@@ -309,8 +392,56 @@ function Voters({ id, state, onChanged }: { id: string; state: Election['state']
             </tbody>
           </table>
         </div>
-        {rows.length > 200 && <p className="muted small">Showing the first 200 of {rows.length}. Search to narrow down.</p>}
-        <p className="muted small">Contacts are partly hidden. Whether someone voted is shown, never what they voted.</p>
+
+        {rows.length > 0 && (
+          <div className="row between" style={{ marginTop: '.75rem', alignItems: 'center' }}>
+            <div className="small muted">
+              Showing <strong>{startIdx + 1}</strong>–<strong>{Math.min(startIdx + pageSize, rows.length)}</strong> of <strong>{rows.length}</strong> voter{rows.length === 1 ? '' : 's'}
+            </div>
+            <div className="row" style={{ gap: '.5rem', alignItems: 'center' }}>
+              <label className="small muted row" style={{ gap: '.3rem', margin: 0, alignItems: 'center' }}>
+                Per page:
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                  }}
+                  style={{ margin: 0, padding: '.2rem .5rem', minHeight: 32 }}
+                  aria-label="Voters per page"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn sm"
+                disabled={currentSafePage <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                aria-label="Previous page of voters"
+              >
+                Previous
+              </button>
+              <span className="small muted">
+                Page {currentSafePage} of {totalPages}
+              </span>
+              <button
+                type="button"
+                className="btn sm"
+                disabled={currentSafePage >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                aria-label="Next page of voters"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+        <p className="muted small" style={{ marginTop: '.75rem' }}>
+          Contacts are partly hidden. Whether someone voted is shown, never what they voted.
+        </p>
       </div>
     </div>
   );

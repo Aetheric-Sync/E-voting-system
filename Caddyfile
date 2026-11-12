@@ -1,0 +1,18 @@
+{
+  # Replace example.com with your real domain. Caddy fetches Let's Encrypt
+  # certificates automatically — no certbot or manual renewal needed.
+  example.com {
+    # The web portal handles all routes except /api/*
+    reverse_proxy /api/* api:3000
+    reverse_proxy web:3001
+
+    # Security headers (belt-and-suspenders; web app sets them too)
+    header {
+      Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+      X-Content-Type-Options nosniff
+      X-Frame-Options DENY
+      Referrer-Policy no-referrer
+    }
+  }
+}
+

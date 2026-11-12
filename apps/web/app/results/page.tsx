@@ -15,12 +15,31 @@ export default function ResultsIndex() {
       <h1>Published results</h1>
       {loading && <Loading />}
       {error && <Alert kind="error">{error}</Alert>}
-      {data?.length === 0 && <Alert>No results have been published yet.</Alert>}
+
+      {data && data.length === 0 && (
+        <div className="card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>
+          <h2>No results published yet</h2>
+          <p className="muted">
+            Official election results will appear here once voting is closed and results are tallied, verified, and sealed by the administrators.
+          </p>
+          <div className="row" style={{ justifyContent: 'center', marginTop: '1.25rem', gap: '.75rem' }}>
+            <Link className="btn" href="/verify">
+              Check a ballot receipt
+            </Link>
+            <Link className="btn primary" href="/vote">
+              Go to voter sign in
+            </Link>
+          </div>
+        </div>
+      )}
+
       {data?.map((e) => (
         <Link key={e.id} href={`/results/${e.id}`} className="card link">
           <h2>{e.title}</h2>
           {e.description && <p className="muted">{e.description}</p>}
-          <p className="small muted">{e.closesAt ? `Closed ${fmtDate(e.closesAt)}` : `${e.positionCount} position${e.positionCount === 1 ? '' : 's'}`}</p>
+          <p className="small muted">
+            {e.closesAt ? `Closed ${fmtDate(e.closesAt)}` : `${e.positionCount} position${e.positionCount === 1 ? '' : 's'}`}
+          </p>
         </Link>
       ))}
     </PublicShell>

@@ -15,6 +15,15 @@ export const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 1000)
 /** datetime-local value (browser local time) -> ISO string, or undefined when empty. */
 export const localToIso = (v: string) => (v ? new Date(v).toISOString() : undefined);
 
+/** ISO string -> datetime-local input string (YYYY-MM-DDTHH:mm). */
+export const isoToLocal = (iso?: string) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 export function download(filename: string, text: string, mime = 'text/plain') {
   const url = URL.createObjectURL(new Blob([text], { type: mime }));
   const a = document.createElement('a');

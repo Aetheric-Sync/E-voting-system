@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import { VoterRow } from '@evote/core';
 import { AuthUser, Public, RateLimit, Roles } from '../auth/auth.guard';
 import { CreateElectionInput, ElectionsService } from './elections.service';
@@ -23,6 +23,18 @@ export class ElectionsController {
   @Roles('ADMIN', 'OBSERVER')
   get(@Req() req: { user: AuthUser }, @Param('id') id: string) {
     return this.svc.getVisible(id, req.user.role === 'ADMIN');
+  }
+
+  @Put(':id')
+  @Roles('ADMIN')
+  update(@Req() req: { user: AuthUser }, @Param('id') id: string, @Body() body: CreateElectionInput) {
+    return this.svc.update(id, body, req.user.id);
+  }
+
+  @Post(':id/duplicate')
+  @Roles('ADMIN')
+  duplicate(@Req() req: { user: AuthUser }, @Param('id') id: string) {
+    return this.svc.duplicate(id, req.user.id);
   }
 
   @Delete(':id')

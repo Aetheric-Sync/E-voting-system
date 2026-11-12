@@ -37,6 +37,14 @@ before(async () => {
   process.env.ADMIN_PASSWORD = 'correct-horse-battery';
   process.env.OTP_ECHO = 'true';
   process.env.SESSION_SECRET = 'z'.repeat(48);
+
+  if (process.env.DATABASE_URL) {
+    const { PrismaClient } = await import('@prisma/client');
+    const prisma = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+    await prisma.$executeRawUnsafe('TRUNCATE "Election", "StaffUser", "SessionRevocation", "OtpRecord", "Voter" CASCADE');
+    await prisma.$disconnect();
+  }
+
   const { NestFactory } = await import('@nestjs/core');
   const { AppModule } = await import('./app.module');
   const { configureApp } = await import('./configure');
@@ -93,12 +101,16 @@ test('whole election over HTTP, with the right people allowed at each step', asy
   assert.equal((await observer.call('GET', `/elections/${e.id}`)).status, 404);
   assert.equal((await observer.call('GET', '/elections')).json.length, 0);
 
+  // observer cannot edit or duplicate elections
+  assert.equal((await observer.call('PUT', `/elections/${e.id}`, { title: 'Observer Edit', mode: 'ANONYMOUS_AUDIT', positions: [] })).status, 403);
+  assert.equal((await observer.call('POST', `/elections/${e.id}/duplicate`)).status, 403);
+
   // register
   const imp = await admin.call('POST', `/elections/${e.id}/voters`, { csv: 'id,name,email\nCSC/21/001,Ada Obi,ada@test.local\nCSC/21/002,Bello Musa,bello@test.local\nbad row' });
   assert.equal(imp.json.added, 2);
   assert.equal(imp.json.errors.length, 1);
 
-  // a voter session cannot open the election; the admin can
+  // a voter session cannot open, edit, or duplicate the election; the admin can
   const first = await voter.call('POST', '/auth/voter/request-otp', { voterId: 'CSC/21/001' });
   assert.match(first.json.devCode, /^\d{6}$/);
   const again = await voter.call('POST', '/auth/voter/request-otp', { voterId: 'csc/21/001' }); // inside the 30s cooldown
@@ -107,6 +119,8 @@ test('whole election over HTTP, with the right people allowed at each step', asy
   assert.deepEqual(unknown.json, { sent: true });
   assert.equal((await voter.call('POST', '/auth/voter/verify-otp', { voterId: 'csc/21/001', code: first.json.devCode === '000000' ? '000001' : '000000' })).status, 401);
   assert.equal((await voter.call('POST', '/auth/voter/verify-otp', { voterId: 'csc/21/001', code: first.json.devCode })).status, 201);
+  assert.equal((await voter.call('PUT', `/elections/${e.id}`, { title: 'Voter Edit', mode: 'ANONYMOUS_AUDIT', positions: [] })).status, 403);
+  assert.equal((await voter.call('POST', `/elections/${e.id}/duplicate`)).status, 403);
   assert.equal((await voter.call('POST', `/elections/${e.id}/open`)).status, 403);
   assert.equal((await admin.call('POST', `/elections/${e.id}/open`)).status, 201);
   assert.equal((await observer.call('GET', `/elections/${e.id}`)).status, 200, 'observers can see it once it is open');
@@ -133,6 +147,8 @@ test('voting, receipts, sealing and public results', async () => {
 
   // voters cannot reach staff routes or other elections' data
   assert.equal((await w1.call('GET', '/elections')).status, 403);
+  assert.equal((await w1.call('PUT', `/elections/${e.id}`, {})).status, 403);
+  assert.equal((await w1.call('POST', `/elections/${e.id}/duplicate`)).status, 403);
   assert.equal((await w1.call('POST', `/elections/${e.id}/close`)).status, 403);
   assert.equal((await w1.call('GET', `/elections/${e.id}/audit`)).status, 403);
   const mine = await w1.call('GET', '/me/elections');

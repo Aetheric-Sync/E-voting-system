@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { download, pct, resultsCsv } from '@/lib/format';
 import type { Candidate, Position, Sealed, Turnout } from '@/lib/types';
 import { Alert } from './ui';
@@ -22,6 +23,7 @@ const TYPE_NOTE: Record<string, string> = {
 };
 
 export function ResultsView({ title, positions, titles, candidates, sealed, turnout }: Props) {
+  const [viewMode, setViewMode] = useState<'both' | 'bars' | 'table'>('bars');
   const name = (id: string) => candidates[id]?.name ?? id;
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'election';
 
@@ -44,6 +46,36 @@ export function ResultsView({ title, positions, titles, candidates, sealed, turn
         </div>
       )}
 
+      <div className="row between noprint" style={{ alignItems: 'center' }}>
+        <span className="small muted">Display results format:</span>
+        <div className="row" style={{ gap: '.25rem' }}>
+          <button
+            type="button"
+            className={`btn sm ${viewMode === 'both' ? 'primary' : ''}`}
+            onClick={() => setViewMode('both')}
+            aria-pressed={viewMode === 'both'}
+          >
+            Bars &amp; Table
+          </button>
+          <button
+            type="button"
+            className={`btn sm ${viewMode === 'bars' ? 'primary' : ''}`}
+            onClick={() => setViewMode('bars')}
+            aria-pressed={viewMode === 'bars'}
+          >
+            Bars only
+          </button>
+          <button
+            type="button"
+            className={`btn sm ${viewMode === 'table' ? 'primary' : ''}`}
+            onClick={() => setViewMode('table')}
+            aria-pressed={viewMode === 'table'}
+          >
+            Table only
+          </button>
+        </div>
+      </div>
+
       {positions.map((p) => {
         const r = sealed.results.find((x) => x.positionId === p.id);
         if (!r) return null;
@@ -63,35 +95,97 @@ export function ResultsView({ title, positions, titles, candidates, sealed, turn
                 <strong>Tie at the cut-off.</strong> The last seat is tied. The names marked below are only a stable placeholder: the electoral committee must decide how to settle it.
               </Alert>
             )}
-            {order.map((id) => {
-              const votes = first[id] ?? 0;
-              const win = r.winners.includes(id);
-              return (
-                <div key={id} className="bar-row">
-                  <div>
-                    {name(id)}
-                    {win && <span className="winner-tag">{p.type === 'REFERENDUM' ? 'CARRIED' : r.tiedAtCutoff ? 'TIED' : 'ELECTED'}</span>}
-                  </div>
-                  <div className={`bar ${win ? 'win' : ''}`} aria-hidden="true">
-                    <div style={{ width: `${(votes / max) * 100}%` }} />
-                  </div>
-                  <div className="small right">
-                    {votes} · {pct(votes, r.totalBallots)}%
-                  </div>
-                </div>
-              );
-            })}
-            {r.abstentions > 0 && <p className="muted small">{r.abstentions} abstained.</p>}
+
+            {(viewMode === 'both' || viewMode === 'bars') && (
+              <div style={{ margin: '.5rem 0 1rem' }}>
+                {order.map((id) => {
+                  const votes = first[id] ?? 0;
+                  const win = r.winners.includes(id);
+                  return (
+                    <div key={id} className="bar-row">
+                      <div>
+                        {name(id)}
+                        {win && (
+                          <span className="winner-tag">
+                            {p.type === 'REFERENDUM' ? 'CARRIED' : r.tiedAtCutoff ? 'TIED' : 'ELECTED'}
+                          </span>
+                        )}
+                      </div>
+                      <div className={`bar ${win ? 'win' : ''}`} aria-hidden="true">
+                        <div style={{ width: `${(votes / max) * 100}%` }} />
+                      </div>
+                      <div className="small right">
+                        {votes} · {pct(votes, r.totalBallots)}%
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Summary table: always accessible to screen readers, visually visible in 'both' and 'table' modes */}
+            <div
+              className={`table-wrap ${viewMode === 'bars' ? 'sr-only' : ''}`}
+              style={viewMode === 'bars' ? undefined : { margin: '.5rem 0' }}
+            >
+              <table aria-label={`Summary table for ${titles[p.id]}`}>
+                <thead>
+                  <tr>
+                    <th scope="col">Candidate / Option</th>
+                    <th scope="col">Votes</th>
+                    <th scope="col">Share</th>
+                    <th scope="col">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {order.map((id) => {
+                    const votes = first[id] ?? 0;
+                    const win = r.winners.includes(id);
+                    return (
+                      <tr key={id}>
+                        <td>
+                          <strong>{name(id)}</strong>
+                        </td>
+                        <td>{votes}</td>
+                        <td>{pct(votes, r.totalBallots)}%</td>
+                        <td>
+                          {win ? (
+                            <span className="winner-tag" style={{ marginLeft: 0 }}>
+                              {p.type === 'REFERENDUM' ? 'CARRIED' : r.tiedAtCutoff ? 'TIED' : 'ELECTED'}
+                            </span>
+                          ) : (
+                            <span className="muted">Not elected</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {r.abstentions > 0 && (
+                    <tr>
+                      <td className="muted">Abstained</td>
+                      <td>{r.abstentions}</td>
+                      <td>{pct(r.abstentions, r.totalBallots)}%</td>
+                      <td className="muted">—</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {r.abstentions > 0 && viewMode === 'bars' && (
+              <p className="muted small">{r.abstentions} abstained.</p>
+            )}
+
             {r.rounds && r.rounds.length > 1 && (
-              <details>
+              <details style={{ marginTop: '1rem' }}>
                 <summary>How the ranked count was decided ({r.rounds.length} rounds)</summary>
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>Round</th>
-                        <th>Counts</th>
-                        <th>Eliminated</th>
+                        <th scope="col">Round</th>
+                        <th scope="col">Counts</th>
+                        <th scope="col">Eliminated</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -120,7 +214,7 @@ export function ResultsView({ title, positions, titles, candidates, sealed, turn
         <p className="hash">{sealed.resultHash}</p>
         <p className="small">Audit log head at sealing</p>
         <p className="hash">{sealed.auditHead}</p>
-        <div className="row noprint">
+        <div className="row noprint" style={{ marginTop: '1rem' }}>
           <button className="btn sm" onClick={() => download(`${slug}-results.csv`, resultsCsv({ positions, titles, candidates, sealed }), 'text/csv')}>
             Download CSV
           </button>

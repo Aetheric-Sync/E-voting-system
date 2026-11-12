@@ -8,7 +8,7 @@ export class ApiError extends Error {
 }
 
 interface Options {
-  method?: 'GET' | 'POST' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   headers?: Record<string, string>;
 }
@@ -49,4 +49,4 @@ export async function api<T>(path: string, { method = 'GET', body, headers }: Op
   return data as T;
 }
 
-export const errorText = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong');
+export const errorText = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong');

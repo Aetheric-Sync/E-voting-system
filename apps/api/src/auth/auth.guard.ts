@@ -58,7 +58,7 @@ export class AuthGuard implements CanActivate {
     @Inject(RateLimiter) private readonly limiter: RateLimiter,
   ) {}
 
-  canActivate(ctx: ExecutionContext): boolean {
+  canActivate(ctx: ExecutionContext): boolean | Promise<boolean> {
     const req = ctx.switchToHttp().getRequest();
     const targets = [ctx.getHandler(), ctx.getClass()];
 
@@ -67,10 +67,23 @@ export class AuthGuard implements CanActivate {
     }
 
     const rate = this.reflector.getAllAndOverride<{ limit: number; windowSeconds: number } | undefined>(RATE_KEY, targets);
-    if (rate && !this.limiter.allow(`${req.ip}|${req.method}|${req.route?.path ?? req.path}`, rate.limit, rate.windowSeconds)) {
-      throw new HttpException('Too many requests, slow down', HttpStatus.TOO_MANY_REQUESTS);
+    if (rate) {
+      const allowed = this.limiter.allow(`${req.ip}|${req.method}|${req.route?.path ?? req.path}`, rate.limit, rate.windowSeconds);
+      if (allowed instanceof Promise) {
+        return allowed.then((ok) => {
+          if (!ok) throw new HttpException('Too many requests, slow down', HttpStatus.TOO_MANY_REQUESTS);
+          return this.authenticateSession(ctx, targets, req);
+        });
+      }
+      if (!allowed) {
+        throw new HttpException('Too many requests, slow down', HttpStatus.TOO_MANY_REQUESTS);
+      }
     }
 
+    return this.authenticateSession(ctx, targets, req);
+  }
+
+  private authenticateSession(ctx: ExecutionContext, targets: any[], req: any): boolean {
     const payload = this.signer.verify(readCookie(req.headers.cookie, COOKIE_NAME));
     const session = payload && !this.auth.isRevoked(payload.sid) ? payload : null;
     if (session) req.user = { id: session.sub, role: session.role, name: session.name, sid: session.sid, exp: session.exp } satisfies AuthUser;

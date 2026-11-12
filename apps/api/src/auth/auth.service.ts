@@ -1,22 +1,15 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
-import { BadRequestException, ConflictException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, Optional, UnauthorizedException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { normalizeVoterId } from '@evote/core';
 import { VOTE_STORE, VoteStore } from '../domain/store';
 import { NOTIFIER, Notifier } from './notifier';
 import { StaffRole, StaffUser, USER_STORE, UserStore, hashPassword, verifyPassword } from './users';
+import { AUTH_STORAGE, AuthStorage, InMemoryAuthStorage } from './auth-storage';
 
 const OTP_TTL_MS = 10 * 60_000;
 const OTP_RESEND_MS = 30_000;
 const OTP_MAX_ATTEMPTS = 5;
 const MIN_PASSWORD = 10;
-
-interface PendingOtp {
-  hash: string;
-  salt: string;
-  expiresAt: number;
-  attempts: number;
-  sentAt: number;
-}
 
 export interface VoterIdentity {
   id: string;
@@ -26,10 +19,10 @@ export interface VoterIdentity {
 const sha = (s: string) => createHash('sha256').update(s).digest();
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('Auth');
-  private pending = new Map<string, PendingOtp>();
-  private revoked = new Map<string, number>();
+  private readonly storage: AuthStorage;
+  private readonly cleanupTimer: NodeJS.Timeout;
   /** Computed once so a missing account costs as much time as a wrong password. */
   private dummyHash?: Promise<string>;
 
@@ -37,7 +30,27 @@ export class AuthService {
     @Inject(VOTE_STORE) private readonly store: VoteStore,
     @Inject(USER_STORE) private readonly users: UserStore,
     @Inject(NOTIFIER) private readonly notifier: Notifier,
-  ) {}
+    @Optional() @Inject(AUTH_STORAGE) storage?: AuthStorage,
+  ) {
+    this.storage = storage ?? new InMemoryAuthStorage();
+    this.cleanupTimer = setInterval(() => {
+      this.storage.cleanupExpired().catch((err) => {
+        this.log.error(`Periodic auth cleanup failed: ${(err as Error).message}`);
+      });
+    }, 60_000);
+    this.cleanupTimer.unref();
+  }
+
+  async onModuleInit() {
+    await this.storage.loadRevocations();
+  }
+
+  onModuleDestroy() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+    }
+    this.storage.dispose?.();
+  }
 
   /**
    * Always answers the same way, so the endpoint cannot be used to find out who is registered.
@@ -48,17 +61,18 @@ export class AuthService {
     const voter = id ? await this.store.getVoter(id) : undefined;
     if (!voter) return { sent: true };
 
-    const prev = this.pending.get(id);
+    const prev = await this.storage.getOtp(id);
     if (prev && now - prev.sentAt < OTP_RESEND_MS) return { sent: true };
 
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const salt = randomBytes(8).toString('hex');
-    this.pending.set(id, { hash: sha(salt + code).toString('hex'), salt, expiresAt: now + OTP_TTL_MS, attempts: 0, sentAt: now });
+    const hash = sha(salt + code).toString('hex');
+    await this.storage.saveOtp(id, { hash, salt, expiresAt: now + OTP_TTL_MS, sentAt: now });
 
     try {
       await this.notifier.sendOtp({ to: { email: voter.email, phone: voter.phone }, name: voter.name, code, ttlMinutes: OTP_TTL_MS / 60_000 });
     } catch (err) {
-      this.pending.delete(id);
+      await this.storage.deleteOtp(id);
       this.log.error(`OTP delivery failed for a voter: ${(err as Error).message}`);
     }
     const echo = process.env.OTP_ECHO === 'true' && process.env.NODE_ENV !== 'production';
@@ -68,16 +82,16 @@ export class AuthService {
   async verifyOtp(rawVoterId: string, code: string, now = Date.now()): Promise<VoterIdentity> {
     const fail = () => new UnauthorizedException('Invalid or expired code');
     const id = normalizeVoterId(rawVoterId);
-    const p = this.pending.get(id);
+    const p = await this.storage.getOtp(id);
     if (!p || p.expiresAt < now || !/^\d{6}$/.test(code)) throw fail();
     if (p.attempts >= OTP_MAX_ATTEMPTS) {
-      this.pending.delete(id);
+      await this.storage.deleteOtp(id);
       throw fail();
     }
-    p.attempts++;
+    await this.storage.incrementOtpAttempts(id);
     const ok = timingSafeEqual(sha(p.salt + code), Buffer.from(p.hash, 'hex'));
     if (!ok) throw fail();
-    this.pending.delete(id);
+    await this.storage.deleteOtp(id);
     const voter = await this.store.getVoter(id);
     if (!voter) throw fail();
     return { id: voter.id, name: voter.name };
@@ -131,14 +145,15 @@ export class AuthService {
     this.log.log(generated ? `Dev admin created: ${email} / ${password}` : `Admin account ready: ${email}`);
   }
 
-  revoke(sid: string, expSeconds: number) {
-    this.revoked.set(sid, expSeconds);
-    if (this.revoked.size > 10_000) {
-      const now = Date.now() / 1000;
-      for (const [k, v] of this.revoked) if (v < now) this.revoked.delete(k);
+  async revoke(sid: string, expSeconds: number): Promise<void> {
+    try {
+      await this.storage.revoke(sid, expSeconds);
+    } catch (err) {
+      this.log.error(`Session revocation failed: ${(err as Error).message}`);
     }
   }
+
   isRevoked(sid: string) {
-    return this.revoked.has(sid);
+    return this.storage.isRevoked(sid);
   }
 }

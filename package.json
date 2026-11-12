@@ -6,9 +6,17 @@
   "scripts": {
     "build": "npm run build -w @evote/core && npm run build -w @evote/api && npm run build -w @evote/web",
     "test": "npm test -w @evote/core && npm test -w @evote/api",
+    "test:e2e": "npm run test:e2e -w @evote/web",
     "typecheck": "npm run typecheck -w @evote/core && npm run typecheck -w @evote/api && npm run typecheck -w @evote/web",
     "dev:infra": "docker compose up -d postgres redis"
   },
-  "overrides": { "multer": "^2.5.0", "postcss": "^8.5.23" },
+  "overrides": {
+    "multer": "^2.5.0",
+    "postcss": "^8.5.23",
+    "@prisma/config": {
+      "deepmerge-ts": "^8.0.2"
+    },
+    "deepmerge-ts": "^8.0.2"
+  },
   "engines": { "node": ">=20" }
 }

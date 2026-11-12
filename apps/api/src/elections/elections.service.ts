@@ -16,7 +16,7 @@ import {
 import { CandidateInfo, Election, VOTE_STORE, VoteStore } from '../domain/store';
 
 export interface CreateElectionInput {
-  tenantId: string;
+  tenantId?: string;
   title: string;
   description?: string;
   mode: IntegrityMode;
@@ -67,7 +67,7 @@ function isoOrUndefined(v: string | undefined, field: string): string | undefine
 export class ElectionsService {
   constructor(@Inject(VOTE_STORE) private readonly store: VoteStore) {}
 
-  async create(input: CreateElectionInput, actor: string): Promise<Election> {
+  private validateAndBuildElection(input: CreateElectionInput) {
     if (!input.title?.trim()) throw new BadRequestException('A title is required');
     if (!input.positions?.length) throw new BadRequestException('Add at least one position');
     if (input.mode === 'E2E_VERIFIABLE') throw new BadRequestException('End-to-end verifiable mode is not available yet');
@@ -107,21 +107,93 @@ export class ElectionsService {
       return { id, type: p.type, seats, candidateIds: ids, allowAbstain: !!p.allowAbstain };
     });
 
-    const election: Election = {
-      id: randomUUID(),
-      tenantId: input.tenantId || 'default',
+    return {
       title: input.title.trim(),
       description: input.description?.trim() || undefined,
       mode: input.mode,
-      state: 'DRAFT',
       positions,
       titles,
       candidates,
       opensAt,
       closesAt,
     };
+  }
+
+  async create(input: CreateElectionInput, actor: string): Promise<Election> {
+    const built = this.validateAndBuildElection(input);
+    const election: Election = {
+      id: randomUUID(),
+      tenantId: input.tenantId || 'default',
+      state: 'DRAFT',
+      ...built,
+    };
     await this.store.saveElection(election);
     this.store.audit(election.id).append('ELECTION_CREATED', actor, {
+      mode: election.mode,
+      positions: election.positions.map((p) => ({ id: p.id, type: p.type, seats: p.seats, candidates: p.candidateIds.length })),
+    });
+    return election;
+  }
+
+  async update(id: string, input: CreateElectionInput, actor: string): Promise<Election> {
+    const e = await this.get(id);
+    if (e.state !== 'DRAFT') throw new ConflictException('Only a draft election can be edited');
+    const built = this.validateAndBuildElection(input);
+    e.title = built.title;
+    e.description = built.description;
+    e.mode = built.mode;
+    e.positions = built.positions;
+    e.titles = built.titles;
+    e.candidates = built.candidates;
+    e.opensAt = built.opensAt;
+    e.closesAt = built.closesAt;
+    await this.store.saveElection(e);
+    this.store.audit(id).append('ELECTION_UPDATED', actor, {
+      positions: e.positions.map((p) => ({ id: p.id, type: p.type, seats: p.seats, candidates: p.candidateIds.length })),
+    });
+    return e;
+  }
+
+  async duplicate(id: string, actor: string): Promise<Election> {
+    const source = await this.get(id);
+    const titles: Record<string, string> = {};
+    const candidates: Record<string, CandidateInfo> = {};
+    const positions: PositionConfig[] = source.positions.map((p) => {
+      const posId = randomUUID();
+      titles[posId] = source.titles[p.id];
+      const newCandIds: string[] = [];
+      for (const oldCandId of p.candidateIds) {
+        const newCandId = randomUUID();
+        const cand = source.candidates[oldCandId];
+        candidates[newCandId] = cand ? { ...cand } : { name: 'Unknown' };
+        newCandIds.push(newCandId);
+      }
+      return {
+        id: posId,
+        type: p.type,
+        seats: p.seats,
+        candidateIds: newCandIds,
+        allowAbstain: p.allowAbstain,
+      };
+    });
+
+    const election: Election = {
+      id: randomUUID(),
+      tenantId: source.tenantId,
+      title: `${source.title} (Copy)`,
+      description: source.description,
+      mode: source.mode,
+      state: 'DRAFT',
+      positions,
+      titles,
+      candidates,
+      opensAt: undefined,
+      closesAt: undefined,
+    };
+
+    await this.store.saveElection(election);
+    this.store.audit(election.id).append('ELECTION_CREATED', actor, {
+      duplicatedFrom: source.id,
       mode: election.mode,
       positions: positions.map((p) => ({ id: p.id, type: p.type, seats: p.seats, candidates: p.candidateIds.length })),
     });

@@ -1,7 +1,8 @@
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Optional } from '@nestjs/common';
 import { Selection, SelectionError, strategyFor } from '@evote/core';
 import { VOTE_STORE, VoteStore } from '../domain/store';
 import { ElectionsService } from '../elections/elections.service';
+import { InMemoryRateLimitStore, RATE_LIMIT_STORE, RateLimitStore } from '../auth/rate-limit';
 
 export interface CastResult {
   /** One receipt per position. Shown once; never stored next to the voter. */
@@ -15,12 +16,15 @@ export class CastingService {
    * succeeded". Receipt codes are never stored here: linking voter -> receipt would
    * link voter -> ballot and break anonymity. A replay therefore returns no receipts.
    */
-  private readonly seen = new Set<string>();
+  private readonly rateLimitStore: RateLimitStore;
 
   constructor(
     @Inject(VOTE_STORE) private readonly store: VoteStore,
     @Inject(ElectionsService) private readonly elections: ElectionsService,
-  ) {}
+    @Optional() @Inject(RATE_LIMIT_STORE) rateLimitStore?: RateLimitStore,
+  ) {
+    this.rateLimitStore = rateLimitStore ?? new InMemoryRateLimitStore();
+  }
 
   async cast(
     electionId: string,
@@ -31,7 +35,7 @@ export class CastingService {
   ): Promise<CastResult | { alreadyRecorded: true }> {
     if (!idempotencyKey || idempotencyKey.length > 100) throw new BadRequestException('Idempotency-Key header is required');
     const replayKey = `${electionId}|${voterId}|${idempotencyKey}`;
-    if (this.seen.has(replayKey)) return { alreadyRecorded: true };
+    if (await this.rateLimitStore.hasSeenIdempotency(replayKey)) return { alreadyRecorded: true };
 
     const election = await this.elections.get(electionId);
     if (election.state !== 'OPEN') throw new ConflictException('Voting is not open');
@@ -60,9 +64,7 @@ export class CastingService {
     const ok = await this.store.commitVote({ electionId, voterId, ballots: prepared.map((p) => p.stored) });
     if (!ok) throw new ConflictException('You have already voted on one of these positions');
 
-    this.seen.add(replayKey);
-    // The audit record carries NO voter id and NO choice: only that a ballot was accepted.
-    this.store.audit(electionId).append('BALLOT_ACCEPTED', 'system', { ballotHashes: prepared.map((p) => p.stored.ballotHash) });
+    await this.rateLimitStore.markIdempotency(replayKey);
 
     return { receipts: prepared.map((p) => ({ positionId: p.stored.positionId, receiptCode: p.receiptCode })) };
   }

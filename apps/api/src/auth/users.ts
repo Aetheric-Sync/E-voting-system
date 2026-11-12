@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { PrismaClient } from '@prisma/client';
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
 
@@ -50,5 +51,61 @@ export class InMemoryUserStore implements UserStore {
     const user: StaffUser = { ...u, email, id: randomUUID(), createdAt: new Date().toISOString() };
     this.users.set(email, user);
     return user;
+  }
+}
+
+export class PostgresUserStore implements UserStore {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async getByEmail(email: string): Promise<StaffUser | undefined> {
+    const row = await this.prisma.staffUser.findUnique({
+      where: { email: email.toLowerCase() },
+    });
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      role: row.role as StaffRole,
+      passwordHash: row.passwordHash,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  async list(): Promise<StaffUser[]> {
+    const rows = await this.prisma.staffUser.findMany({
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      email: r.email,
+      name: r.name,
+      role: r.role as StaffRole,
+      passwordHash: r.passwordHash,
+      createdAt: r.createdAt.toISOString(),
+    }));
+  }
+
+  async create(u: Omit<StaffUser, 'id' | 'createdAt'>): Promise<StaffUser> {
+    const email = u.email.toLowerCase();
+    const existing = await this.prisma.staffUser.findUnique({ where: { email } });
+    if (existing) throw new Error('exists');
+    const created = await this.prisma.staffUser.create({
+      data: {
+        id: randomUUID(),
+        email,
+        name: u.name,
+        role: u.role,
+        passwordHash: u.passwordHash,
+      },
+    });
+    return {
+      id: created.id,
+      email: created.email,
+      name: created.name,
+      role: created.role as StaffRole,
+      passwordHash: created.passwordHash,
+      createdAt: created.createdAt.toISOString(),
+    };
   }
 }

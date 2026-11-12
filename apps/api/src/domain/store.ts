@@ -25,7 +25,7 @@ export interface Election {
   sealed?: SealedTally;
 }
 
-export type VoterRecord = VoterRow;
+export type VoterRecord = VoterRow & { tenantId?: string; status?: string };
 
 /**
  * Storage port. The in-memory adapter below is for tests and local dev; the
@@ -132,6 +132,7 @@ export class InMemoryVoteStore implements VoteStore {
       list.push(structuredClone(b));
       this.ballots.set(key, list);
     }
+    this.audit(electionId).append('BALLOT_ACCEPTED', 'system', { ballotHashes: ballots.map((b) => b.ballotHash) });
     return true;
   }
 
